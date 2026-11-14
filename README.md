@@ -6,7 +6,7 @@ has two models:
 
 1. **A FoV predictor** (`predictor/`) that predicts which tiles of the video will be in view 5 seconds ahead.
 2. **A CVAE-GAN** (`vae/`) that compresses the predicted crowd frame, 200 numbers, into a latent vector $z_k$ of
-   **10 numbers**, one per SVC video layer. The predictor is pretrained (its trained weights are loaded and set) and only used to produce the frames.
+   **10 numbers**, one per SVC video layer, squashed by a sigmoid so that each number lies between 0 and 1. The predictor is pretrained (its trained weights are loaded and set) and only used to produce the frames.
 
 Most of this README is about one problem in the second model: **with the loss weights of the reference paper, the
 CVAE-GAN learns the average frame** and the latent vector carries no information. The experiments in `vae/` show why
@@ -78,9 +78,11 @@ The CVAE-GAN follows the model of the reference paper:
 > Asynchronous Federated and Deep Reinforcement Learning," *IEEE Internet of Things Journal*, vol. 12, no. 12, 2025.
 
 An **encoder** turns a frame into a mean $\mu_{z,k}$ and a spread $\sigma_{z,k}$ for each of 10 latent slots, and the
-latent vector is drawn as $z_k = \mu_{z,k} + \sigma_{z,k}\,\varepsilon$ with $\varepsilon \sim \mathcal N(0, 1)$. A
-**decoder** redraws the frame from $z_k$ alone, and a **discriminator** judges whether a frame is real or redrawn. Training
-minimises the loss of the paper:
+latent vector is drawn as $z_k = \mu_{z,k} + \sigma_{z,k}\,\varepsilon$ with $\varepsilon \sim \mathcal N(0, 1)$. A **sigmoid**
+then squashes it into (0, 1): the 10 numbers that stand for the frame are $\mathrm{sigmoid}(z_k) = 1/(1 + e^{-z_k})$. A
+**decoder** redraws the frame from $\mathrm{sigmoid}(z_k)$ alone, so the reconstruction error measures what survives the
+squashing, and a **discriminator** judges whether a frame is real or redrawn. Training minimises the loss of the paper
+(line 1 is computed on $z_k$ before the sigmoid):
 
 $$\mathcal L = \tau_1\,\underbrace{\mathrm{KL}\big(\mathcal N(\mu_{z,k}, \sigma^2_{z,k})\,\Vert\,\mathcal N(0, 1)\big)}_{\text{line 1}}
 \;+\; \tau_2\,\underbrace{\tfrac12\lVert X - X_\mathrm{recon}\rVert^2}_{\text{line 2}}
@@ -100,8 +102,8 @@ error is the same as always answering the average frame.
 
 | test folds, 25 runs (section 4) | test RMSE | latent slots in use (of 10) |
 |---|---|---|
-| always redraw the average frame (no latent) | 0.0300 | – |
-| CVAE-GAN, equal weights | 0.0318 ± 0.0088 | **0** in every run |
+| always redraw the average frame (no latent) | 0.0301 | – |
+| CVAE-GAN, equal weights | 0.0304 ± 0.0067 | **0** in every run |
 
 (RMSE: the reconstruction error per tile on the 0–1 tile scale, mean ± standard deviation over the runs.)
 
@@ -165,9 +167,9 @@ below the real differences between tiles. 18 settings, fixed in advance:
 $\tau_1 \in \{\tfrac13, 10^{-1}, 10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}\}$, $\tau_3 \in \{\tfrac13, 0.1, 0.01\}$ and
 $\tau_2 = 1 - \tau_1 - \tau_3$, each trained 25 times on the validation folds.
 
-**Result:** lowering $\tau_1$ removes the collapse (about 2 slots in use at $\tau_1/\tau_2 \approx 10^{-3}$, all 10 at
-$10^{-4}$ and below), but the error improves only a little. Weights chosen on validation give a test RMSE of
-**0.0268 ± 0.0071**, better than equal weights in all 5 turns, yet still close to the average frame (0.0300).
+**Result:** lowering $\tau_1$ removes the collapse (2 – 4 slots in use at $\tau_1/\tau_2 \approx 10^{-3}$, 8 – 10 at $10^{-4}$
+and below), but the error improves only a little. Weights chosen on validation give a test RMSE of **0.0254 ± 0.0061**,
+better than equal weights in all 5 turns, yet still close to the average frame (0.0301).
 
 ### Test 2: normalised input frames, `vae/cvae_gan_normalised_tiles.ipynb`
 
@@ -177,8 +179,8 @@ frames of each run. A tile then differs from its average by about 1 instead of 0
 weights work. The decoder output is linear (no sigmoid), and the RMSE is converted back to the 0–1 scale. Since nothing
 is chosen here, the two fixed models (original and normalised frames) are scored directly on the test folds.
 
-**Result:** the test RMSE falls from 0.0318 ± 0.0088 to **0.0101 ± 0.0013**, lower in all 5 turns and about three times
-below the average frame. With equal weights about 4 of the 10 slots are used.
+**Result:** the test RMSE falls from 0.0304 ± 0.0067 to **0.0110 ± 0.0021**, lower in all 5 turns and about 2.7 times
+below the average frame. With equal weights about 7 of the 10 slots are used.
 
 ![What normalising does](images/normalisation.png)
 
@@ -195,10 +197,10 @@ notebooks also show the full 20 × 10 grid of tile values before and after.
 Combines both: normalised frames and the same 18 settings of $\tau$, with the same folds, repeats and rule. It then applies
 the rule to all 36 settings at once (original or normalised frames × 18 weights) and trains the final model.
 
-**Result:** on normalised frames every setting reaches 0.0096 – 0.0106 on validation, against 0.0304 for the average
-frame. The weights mainly decide how many slots are used: about 4 with equal weights, about 8 at $\tau_1 = 0.1$, all 10 at
-$\tau_1 \le 0.01$. Weights chosen on validation give a test RMSE of **0.0101 ± 0.0019** with 9.6 slots in use on average.
-When the rule also chooses between original and normalised frames, it picks normalised frames in all 5 turns.
+**Result:** on normalised frames every setting reaches 0.0110 – 0.0124 on validation, against 0.0304 for the average
+frame. Equal weights are the worst of them and use about 7 slots; with $\tau_1 \le 0.1$ about all 10 are used. Weights
+chosen on validation give a test RMSE of **0.0101 ± 0.0016** with all 10 slots in use, better than equal weights in all 5
+turns. When the rule also chooses between original and normalised frames, it picks normalised frames in all 5 turns.
 
 ## 6. How the weights were chosen
 
@@ -213,13 +215,14 @@ validation RMSE.*
 - **On the original frames** the spread is about 0.03, so the threshold is $\sigma_x^2 \approx 9 \times 10^{-4}$. To the right of it
   the latent collapses (no slot at $\tau_1/\tau_2 \ge 0.1$, under one at $10^{-2}$); at and below it the slots come into
   use. Equal weights ($\sigma_x = 1$) are 33 times above the spread.
-- **On the normalised frames** the spread is 1, so equal weights sit at the threshold, which is why only about 4 slots are
-  used there. At $\tau_1 = 0.01$ ($\sigma_x \approx 0.1$, ten times below the spread) all 10 are used; going lower only raises
-  the KL charge (about 55 → 100 nats) without lowering the error.
+- **On the normalised frames** the spread is 1, so equal weights sit at the threshold, which is why only about 7 slots are
+  used there. At $\tau_1 = 0.1$ ($\sigma_x \approx 0.3$) about all 10 are used and the validation error is lowest. Going
+  lower does not help: below $\tau_1 = 0.01$ the KL charge rises (about 39 → 47 nats) and the error gets slightly worse,
+  because the sigmoid squashes values of $z_k$ far from 0 to almost 0 or 1, so extra precision in $z_k$ can hardly be used.
 - **$\tau_3$**, the weight of the discriminator, makes almost no difference in either case.
 
 By the rule fixed in advance, the setting with the lowest validation RMSE over all 36 settings is **normalised frames with
-$\tau_1 = 0.01$, $\tau_2 = 0.89$, $\tau_3 = 0.1$** (0.0096 ± 0.0017).
+$\tau_1 = 0.1$, $\tau_2 = 0.89$, $\tau_3 = 0.01$** (0.0110 ± 0.0023). The settings with $\tau_1 = 0.01$ are within 0.0001 of it.
 
 ## 7. Conclusion: why normalised frames and these weights
 
@@ -227,21 +230,22 @@ $\tau_1 = 0.01$, $\tau_2 = 0.89$, $\tau_3 = 0.1$** (0.0096 ± 0.0017).
 
 | how the model is set up (test folds, 25 runs each) | test RMSE | active slots (of 10) |
 |---|---|---|
-| always redraw the average frame (no latent) | 0.0300 | – |
-| original frames, equal weights | 0.0318 ± 0.0088 | 0.0 |
-| original frames, weights chosen on validation | 0.0268 ± 0.0071 | 6.5 |
-| normalised frames, equal weights | 0.0101 ± 0.0013 | 4.2 |
-| **normalised frames, weights chosen on validation** | **0.0101 ± 0.0019** | **9.6** |
+| always redraw the average frame (no latent) | 0.0301 | – |
+| original frames, equal weights | 0.0304 ± 0.0067 | 0.0 |
+| original frames, weights chosen on validation | 0.0254 ± 0.0061 | 9.1 |
+| normalised frames, equal weights | 0.0110 ± 0.0021 | 6.9 |
+| **normalised frames, weights chosen on validation** | **0.0101 ± 0.0016** | **10.0** |
 
 1. **Equal weights collapse** on the original frames: no slot is used in any run, and the error is no better than the
    average frame, because the loss assumes noise of size 1 on tiles that differ by about 0.03.
-2. **Changing only the weights removes the collapse but barely improves the error** (0.0268, against 0.0300 for the
+2. **Changing only the weights removes the collapse but barely improves the error** (0.0254, against 0.0301 for the
    average frame).
-3. **Normalising the frames is what lowers the error**, by about three times, in every one of the 5 turns.
-4. **Once the frames are normalised, the weights decide how many slots are used**, not how large the error is. With
-   $\tau_1 = 0.01$ all 10 slots carry information at the same error as equal weights, which leave about 6 of them unused.
+3. **Normalising the frames is what lowers the error most**, by about 2.7 times, in every one of the 5 turns.
+4. **On normalised frames, choosing the weights helps a little more**: the error drops from 0.0110 to 0.0101 (lower in all
+   5 turns) and all 10 slots carry information, where equal weights leave about 3 of them unused.
 
-**Final setting:** normalised frames with $\tau_1 = 0.01$, $\tau_2 = 0.89$, $\tau_3 = 0.1$, chosen on validation data by a
+**Final setting:** normalised frames with $\tau_1 = 0.1$, $\tau_2 = 0.89$, $\tau_3 = 0.01$, chosen on validation data by a
 rule fixed before any training, and confirmed on test viewers that the choice never saw. The final encoder,
 `vae/cvaegan_encoder.pt` (written by test 3), is trained with this setting on all 50 viewers; it stores the normalisation
-statistics with the weights, so it turns a predicted frame directly into the 10 numbers $z_k$.
+statistics with the weights, so together with the sigmoid it turns a predicted frame directly into the 10 numbers
+$\mathrm{sigmoid}(z_k)$, each between 0 and 1.
