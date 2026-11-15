@@ -8,9 +8,21 @@ has two models:
 2. **A CVAE-GAN** (`vae/`) that compresses the predicted crowd frame, 200 numbers, into a latent vector $z_k$ of
    **10 numbers**, one per SVC video layer, squashed by a sigmoid so that each number lies between 0 and 1. The predictor is pretrained (its trained weights are loaded and set) and only used to produce the frames.
 
-Most of this README is about one problem in the second model: **with the loss weights of the reference paper, the
-CVAE-GAN learns the average frame** and the latent vector carries no information. The experiments in `vae/` show why
-and how it was fixed.
+## What this repository documents
+
+The CVAE-GAN, its loss and its training are taken from Nie et al. [14] (section 2). The loss has three weights
+$\tau_1, \tau_2, \tau_3$ that only have to add up to 1, so their values have to be chosen for the data. On our data
+they cannot be set equal: the predicted crowd frames differ from their average by only about 0.03 per tile, and with
+equal weights the model learns the average frame and the latent vector carries no information (section 3).
+
+This repository documents how two settings were chosen for our data:
+
+- **the input frames are normalised**, $X' = (X - \bar X)/s$, with $\bar X$ the mean training frame and $s \approx 0.03$;
+- **the loss weights are set** to $\tau_1 = 0.1$, $\tau_2 = 0.89$, $\tau_3 = 0.01$.
+
+Both are chosen by nested cross-validation over the viewers (section 4). This is a standard procedure, not a new
+method; it is used only so that no setting is chosen on the viewers it is scored on. Sections 3 to 7 give the
+reasoning and the full results.
 
 ## Repository layout
 
@@ -72,16 +84,18 @@ $\hat F_k$ is a 10 × 20 grid saying, for each tile, what share of the crowd is 
 $X$ of the CVAE-GAN. One epoch draws a new group of 10 viewers and gives 7 predicted frames ($k = 6, \dots, 12$);
 training runs for 988 epochs.
 
-The CVAE-GAN follows the model of the reference paper:
+The CVAE-GAN, its loss and its training are taken from:
 
-> X. Nie, C. Wang, T. Zhou, Q. Zhou, X. Zhu, J. Zhang, "Mobility-Aware Cooperative Caching in IoVs Based on Secure
+> [14] X. Nie, C. Wang, T. Zhou, Q. Zhou, X. Zhu, J. Zhang, "Mobility-Aware Cooperative Caching in IoVs Based on Secure
 > Asynchronous Federated and Deep Reinforcement Learning," *IEEE Internet of Things Journal*, vol. 12, no. 12, 2025.
+
+Our frames come with no per-user features, so the decoder has no conditioning input.
 
 An **encoder** turns a frame into a mean $\mu_{z,k}$ and a spread $\sigma_{z,k}$ for each of 10 latent slots, and the
 latent vector is drawn as $z_k = \mu_{z,k} + \sigma_{z,k}\,\varepsilon$ with $\varepsilon \sim \mathcal N(0, 1)$. A **sigmoid**
 then squashes it into (0, 1): the 10 numbers that stand for the frame are $\mathrm{sigmoid}(z_k) = 1/(1 + e^{-z_k})$. A
 **decoder** redraws the frame from $\mathrm{sigmoid}(z_k)$ alone, so the reconstruction error measures what survives the
-squashing, and a **discriminator** judges whether a frame is real or redrawn. Training minimises the loss of the paper
+squashing, and a **discriminator** judges whether a frame is real or redrawn. Training minimises the loss of [14]
 (line 1 is computed on $z_k$ before the sigmoid):
 
 $$\mathcal L = \tau_1\,\underbrace{\mathrm{KL}\big(\mathcal N(\mu_{z,k}, \sigma^2_{z,k})\,\Vert\,\mathcal N(0, 1)\big)}_{\text{line 1}}
@@ -89,13 +103,13 @@ $$\mathcal L = \tau_1\,\underbrace{\mathrm{KL}\big(\mathcal N(\mu_{z,k}, \sigma^
 \;+\; \tau_3\,\underbrace{\big(\mathbb E\log D(X) + \mathbb E\log(1 - D(X_\mathrm{recon}))\big)}_{\text{line 3}},
 \qquad \tau_1 + \tau_2 + \tau_3 = 1.$$
 
-The paper gives no values for the weights $\tau$, so `cvae_gan.ipynb` starts with $\tau_1 = \tau_2 = \tau_3 = \tfrac13$.
+Only the sum of the weights is fixed, so `cvae_gan.ipynb` starts from equal weights, $\tau_1 = \tau_2 = \tau_3 = \tfrac13$.
 
 ![CVAE-GAN architecture](vae/figures/cvaegan_architecture.png)
 
-## 3. The problem: the CVAE-GAN learns the average
+## 3. The problem: with equal weights the CVAE-GAN learns the average
 
-With equal weights, training converges, and the result is useless. Every latent slot ends at $\mu_{z,k} \approx 0$ and
+With equal weights, training converges, but the result is of no use. Every latent slot ends at $\mu_{z,k} \approx 0$ and
 $\sigma_{z,k} \approx 1$ **whatever frame is given**, so $z_k$ is 10 random numbers that say nothing about the frame.
 The decoder, which cannot use $z_k$, learns the best single frame it can draw: the average frame. Its reconstruction
 error is the same as always answering the average frame.
@@ -125,20 +139,16 @@ The predicted crowd frames differ from their average by only about **±0.03** pe
 passed through a predictor, so they are all nearly the same smooth blob. Next to an assumed noise of 1, a difference of
 0.03 is indistinguishable from noise, and encoding it costs tens of nats on line 1 while saving at most about 0.1 on
 line 2. Encoding nothing is the cheapest solution, so every slot collapses to $\mathcal N(0, 1)$ and the decoder redraws
-the average.
-
-In the reference paper the same loss is applied to the movie ratings of individual users: thousands of entries per user,
-and users that differ from each other a lot. There the differences are far above the assumed noise, so information is
-worth its charge.
+the average. Equal weights therefore cannot be used on these frames as they are.
 
 For a linear encoder and decoder this is exact: a latent slot is used along a principal direction of the data only if
-the variance of the data along it is larger than $\tau_1/\tau_2$. For the real, nonlinear networks it is a guide, and
-the experiments below test it.
+the variance of the data along it is larger than $\tau_1/\tau_2$. The networks here are nonlinear, so this shows what
+to expect, and the experiments below check it.
 
 ## 4. How the settings are compared
 
 Every setting is trained and scored in exactly the same way, and the choice of the best setting never sees the data it
-is finally scored on.
+is finally scored on. This is standard nested cross-validation with the viewers as groups; it is not a new method.
 
 - **Viewer folds.** The 50 viewers are split into 5 folds of 10 (viewer number $i$ goes to fold $i \bmod 5$). Each fold
   takes one turn as the **test fold**, so every viewer is tested exactly once.
@@ -184,13 +194,13 @@ below the average frame. With equal weights about 7 of the 10 slots are used.
 
 ![What normalising does](images/normalisation.png)
 
-*One row of 20 tiles of a test frame. (a) The frame is almost the mean frame. (b) Before normalising, their difference is
-about 0.03 per tile. (c) After dividing by $s$, the same differences are about 1: same shape, 33 times larger.* The
+One row of 20 tiles of a test frame. (a) The frame is almost the mean frame. (b) Before normalising, their difference is
+about 0.03 per tile. (c) After dividing by s, the same differences are about 1: same shape, 33 times larger. The
 notebooks also show the full 20 × 10 grid of tile values before and after.
 
 ![Tile values before and after normalising](images/normalisation_grid.png)
 
-*The same frame as a whole 10 × 20 grid, in miniature. Before, the frame is one smooth blob; after, the small differences from the mean frame are what is shown (colour scales differ: 0–1 before, around 0 after).*
+The same frame as a whole 10 × 20 grid, in miniature. Before, the frame is one smooth blob; after, the small differences from the mean frame are what is shown (colour scales differ: 0–1 before, around 0 after).
 
 ### Test 3: normalised frames and different weights, `vae/cvae_gan_normalised_and_diff_weights.ipynb`
 
@@ -206,11 +216,10 @@ turns. When the rule also chooses between original and normalised frames, it pic
 
 ![Choosing tau](images/tau_choice.png)
 
-*Validation RMSE (mean ± standard deviation of 25 runs) against $\tau_1/\tau_2 = \sigma_x^2$ (top axis: $\sigma_x$) for all
-18 settings, on the original frames (left, test 1) and the normalised frames (right, test 3). The dashed line marks
-$\sigma_x^2$ equal to the spread of the tiles squared, the point below which the differences between frames stop looking
-like noise to the loss. The numbers under the blue line are the active latent slots; the circle is the lowest mean
-validation RMSE.*
+Validation RMSE (mean ± standard deviation of 25 runs) against τ₁/τ₂ = σₓ² (top axis: σₓ) for all 18 settings, on
+the original frames (left, test 1) and the normalised frames (right, test 3). The dashed line marks σₓ² equal to the
+spread of the tiles squared, the point below which the differences between frames stop looking like noise to the loss.
+The numbers under the blue line are the active latent slots; the circle is the lowest mean validation RMSE.
 
 - **On the original frames** the spread is about 0.03, so the threshold is $\sigma_x^2 \approx 9 \times 10^{-4}$. To the right of it
   the latent collapses (no slot at $\tau_1/\tau_2 \ge 0.1$, under one at $10^{-2}$); at and below it the slots come into
@@ -219,10 +228,10 @@ validation RMSE.*
   used there. At $\tau_1 = 0.1$ ($\sigma_x \approx 0.3$) about all 10 are used and the validation error is lowest. Going
   lower does not help: below $\tau_1 = 0.01$ the KL charge rises (about 39 → 47 nats) and the error gets slightly worse,
   because the sigmoid squashes values of $z_k$ far from 0 to almost 0 or 1, so extra precision in $z_k$ can hardly be used.
-- **$\tau_3$**, the weight of the discriminator, makes almost no difference in either case.
+- **The discriminator's weight** $\tau_3$ makes almost no difference in either case.
 
-By the rule fixed in advance, the setting with the lowest validation RMSE over all 36 settings is **normalised frames with
-$\tau_1 = 0.1$, $\tau_2 = 0.89$, $\tau_3 = 0.01$** (0.0110 ± 0.0023). The settings with $\tau_1 = 0.01$ are within 0.0001 of it.
+By the rule fixed in advance, the setting with the lowest validation RMSE over all 36 settings is **normalised frames** with
+$\tau_1 = 0.1$, $\tau_2 = 0.89$, $\tau_3 = 0.01$ (0.0110 ± 0.0023). The settings with $\tau_1 = 0.01$ are within 0.0001 of it.
 
 ## 7. Conclusion: why normalised frames and these weights
 
