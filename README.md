@@ -258,3 +258,5 @@ rule fixed before any training, and confirmed on test viewers that the choice ne
 `vae/cvaegan_encoder.pt` (written by test 3), is trained with this setting on all 50 viewers; it stores the normalisation
 statistics with the weights, so together with the sigmoid it turns a predicted frame directly into the 10 numbers
 $\mathrm{sigmoid}(z_k)$, each between 0 and 1.
+
+A DDPG policy network that streams several of these videos to a crowd is in [`ddpg_policy_network/`](ddpg_policy_network/).
